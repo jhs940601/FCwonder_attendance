@@ -452,6 +452,7 @@ select.date-select, select.form-select{
 
 <div class="wrap" id="app"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 /* ================= DATA ================= */
 const MEMBERS_BY_DEPT = {
@@ -494,26 +495,69 @@ function findNextThursdayISO(){
   return isoOf(SEASON_DATES[0]);
 }
 
-/* ================= STORAGE HELPERS ================= */
+/* ================= SUPABASE ================= */
+const SUPABASE_URL = 'https://iaatbwckxnxqvadpgvuq.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_zfsWeLV4y-LblI24EVJ_JQ_Pw3s49cT';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+/* ================= STORAGE HELPERS (Supabase) ================= */
 async function getDateRecord(iso){
   try{
-    const res = await window.storage.get('attendance:'+iso, true);
-    return res && res.value ? JSON.parse(res.value) : {};
-  }catch(e){ return {}; }
+    const { data, error } = await sb.from('attendance')
+      .select('member_name,department,status,updated_at')
+      .eq('training_date', iso);
+    if(error) throw error;
+    const rec = {};
+    (data||[]).forEach(row => {
+      rec[row.member_name] = { dept: row.department, status: row.status, ts: row.updated_at };
+    });
+    return rec;
+  }catch(e){ console.error('불러오기 실패', e); return {}; }
 }
-async function saveDateRecord(iso, record){
+async function saveAttendanceRow(iso, name, dept, status){
   try{
-    await window.storage.set('attendance:'+iso, JSON.stringify(record), true);
+    const { error } = await sb.from('attendance').upsert({
+      training_date: iso, member_name: name, department: dept, status: status,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'training_date,member_name' });
+    if(error) throw error;
     return true;
   }catch(e){ console.error('저장 실패', e); return false; }
 }
 async function getAllSeasonRecords(){
   const out = {};
-  await Promise.all(SEASON_DATES.map(async d => {
-    const iso = isoOf(d);
-    out[iso] = await getDateRecord(iso);
-  }));
+  SEASON_DATES.forEach(d => out[isoOf(d)] = {});
+  try{
+    const startIso = isoOf(SEASON_DATES[0]);
+    const endIso = isoOf(SEASON_DATES[SEASON_DATES.length-1]);
+    const { data, error } = await sb.from('attendance')
+      .select('training_date,member_name,department,status')
+      .gte('training_date', startIso).lte('training_date', endIso);
+    if(error) throw error;
+    (data||[]).forEach(row => {
+      const iso = row.training_date;
+      if(!out[iso]) out[iso] = {};
+      out[iso][row.member_name] = { dept: row.department, status: row.status };
+    });
+  }catch(e){ console.error('시즌 데이터 불러오기 실패', e); }
   return out;
+}
+
+/* ================= REALTIME ================= */
+function initRealtime(){
+  sb.channel('attendance-live')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, () => {
+      handleRealtimeChange();
+    })
+    .subscribe();
+}
+function handleRealtimeChange(){
+  if(state.mode === 'daily') renderDailyContent(state.publicDate);
+  else if(state.mode === 'cumulative') renderPublicCumulative();
+  else if(state.mode === 'admin' && state.adminAuthed) renderNonVotersContent();
+  else if(state.mode === 'vote' && state.date && state.step < 5){
+    getDateRecord(state.date).then(rec => { state.dateRecord = rec; render(); });
+  }
 }
 
 /* ================= STATE ================= */
@@ -676,9 +720,7 @@ function selectStatus(s){ state.status = s; render(); }
 async function submitAttendance(){
   const btn = document.getElementById('submitBtn');
   if(btn){ btn.disabled = true; btn.textContent = '제출 중...'; }
-  const record = await getDateRecord(state.date);
-  record[state.name] = { dept: state.dept, status: state.status, ts: Date.now() };
-  const ok = await saveDateRecord(state.date, record);
+  const ok = await saveAttendanceRow(state.date, state.name, state.dept, state.status);
   if(ok){ state.step = 5; render(); }
   else{
     alert('제출에 실패했습니다. 다시 시도해주세요.');
@@ -939,10 +981,11 @@ async function renderCumulativeInto(targetId){
 
 /* ================= INIT ================= */
 render();
+initRealtime();
 </script>
 
 <div class="wrap">
-  <div class="footer-note">FC원더티처 축구동호회 · Wonder Teacher Football Club<br>문의사항은 총무부로 연락해주세요 ⚽</div>
+  <div class="footer-note">🟢 실시간 동기화 중 · 모든 회원의 화면에 즉시 반영돼요<br>FC원더티처 축구동호회 · Wonder Teacher Football Club<br>문의사항은 총무부로 연락해주세요 ⚽</div>
 </div>
 
 </body>
