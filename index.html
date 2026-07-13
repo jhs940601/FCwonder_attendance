@@ -478,7 +478,7 @@ select.date-select, select.form-select{
       <button data-mode="vote" class="active">투표하기</button>
       <button data-mode="daily">출석현황</button>
       <button data-mode="cumulative">누적점수</button>
-      <button data-mode="special">친선경기</button>
+      <button data-mode="special">추가일정</button>
     </div>
   </div>
 </header>
@@ -555,8 +555,8 @@ const TEXT_DEFAULTS = {
   deadline_text: '매주 월요일까지 참석 투표 완료해주세요!',
   notice_vote_line1: '✏️ 수정 사항이 생기면 훈련 시작 전까지 다시 선택해서 제출해주세요.',
   notice_vote_line2: '마지막으로 제출한 내용이 최종 반영됩니다.',
-  special_tab_title: '⚽ 친선경기',
-  special_tab_desc: '정기 목요일 훈련이 아닌 별도 모임의 참석 투표예요. 여기 점수는 누적점수표에는 반영되지 않아요.',
+  special_tab_title: '📌 추가일정',
+  special_tab_desc: '친선경기, 대회, 회식 등 정기 목요일 훈련이 아닌 일정의 참석 투표예요. 여기 점수는 누적점수표에는 반영되지 않아요.',
   footer_line1: '⚽ FC원더티처 축구동호회 ⚽',
   footer_line2: 'Wonder Teacher Football Club',
 };
@@ -566,8 +566,8 @@ const TEXT_LABELS = {
   deadline_text: '상단 마감 안내 배너 문구',
   notice_vote_line1: '투표 화면 하단 안내 (첫째 줄)',
   notice_vote_line2: '투표 화면 하단 안내 (둘째 줄)',
-  special_tab_title: '친선경기 탭 제목',
-  special_tab_desc: '친선경기 탭 설명 문구',
+  special_tab_title: '추가일정 탭 제목',
+  special_tab_desc: '추가일정 탭 설명 문구',
   footer_line1: '하단 푸터 (첫째 줄)',
   footer_line2: '하단 푸터 (둘째 줄)',
 };
@@ -644,7 +644,7 @@ async function getAllSeasonRecords(){
   return out;
 }
 
-/* ================= STORAGE HELPERS: 친선경기 (special events) ================= */
+/* ================= STORAGE HELPERS: 추가일정 (special events) ================= */
 async function loadSpecialEvents(){
   try{
     const { data, error } = await sb.from('special_events').select('*').order('event_time', { ascending: true });
@@ -661,7 +661,7 @@ async function createSpecialEvent(eventTimeISO, location, content){
 }
 async function loadAllSpecialAttendance(){
   try{
-    const { data, error } = await sb.from('special_attendance').select('event_id,member_name,department,status');
+    const { data, error } = await sb.from('special_attendance').select('event_id,member_name,department,status,note');
     if(error) throw error;
     return data || [];
   }catch(e){ return []; }
@@ -669,22 +669,65 @@ async function loadAllSpecialAttendance(){
 async function getSpecialAttendance(eventId){
   try{
     const { data, error } = await sb.from('special_attendance')
-      .select('member_name,department,status').eq('event_id', eventId);
+      .select('member_name,department,status,note').eq('event_id', eventId);
     if(error) throw error;
     const rec = {};
-    (data||[]).forEach(r => rec[r.member_name] = { dept: r.department, status: r.status });
+    (data||[]).forEach(r => rec[r.member_name] = { dept: r.department, status: r.status, note: r.note || '' });
     return rec;
   }catch(e){ return {}; }
 }
-async function saveSpecialAttendanceRow(eventId, name, dept, status){
+async function saveSpecialAttendanceRow(eventId, name, dept, status, note){
   try{
     const { error } = await sb.from('special_attendance').upsert({
-      event_id: eventId, member_name: name, department: dept, status: status,
+      event_id: eventId, member_name: name, department: dept, status: status, note: note || '',
       updated_at: new Date().toISOString()
     }, { onConflict: 'event_id,member_name' });
     if(error) throw error;
     return true;
   }catch(e){ console.error('저장 실패', e); return false; }
+}
+
+/* ================= STORAGE HELPERS: 추가일정 내 투표 (polls) ================= */
+async function loadSpecialPolls(){
+  try{
+    const { data, error } = await sb.from('special_polls').select('*').order('created_at', { ascending: false });
+    if(error) throw error;
+    return data || [];
+  }catch(e){ console.error('투표 불러오기 실패', e); return []; }
+}
+async function createSpecialPoll(title, options){
+  try{
+    const { error } = await sb.from('special_polls').insert({ title, options });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('투표 등록 실패', e); return false; }
+}
+async function loadAllPollVotes(){
+  try{
+    const { data, error } = await sb.from('special_poll_votes').select('poll_id,member_name,department,option_choice');
+    if(error) throw error;
+    return data || [];
+  }catch(e){ return []; }
+}
+async function getPollVotes(pollId){
+  try{
+    const { data, error } = await sb.from('special_poll_votes')
+      .select('member_name,department,option_choice').eq('poll_id', pollId);
+    if(error) throw error;
+    const rec = {};
+    (data||[]).forEach(r => rec[r.member_name] = { dept: r.department, choice: r.option_choice });
+    return rec;
+  }catch(e){ return {}; }
+}
+async function savePollVote(pollId, name, dept, choice){
+  try{
+    const { error } = await sb.from('special_poll_votes').upsert({
+      poll_id: pollId, member_name: name, department: dept, option_choice: choice,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'poll_id,member_name' });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('투표 저장 실패', e); return false; }
 }
 
 /* ================= REALTIME ================= */
@@ -700,6 +743,12 @@ function initRealtime(){
       if(state.mode === 'special') renderSpecialTab();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'special_attendance' }, () => {
+      if(state.mode === 'special') renderSpecialTab();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'special_polls' }, () => {
+      if(state.mode === 'special') renderSpecialTab();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'special_poll_votes' }, () => {
       if(state.mode === 'special') renderSpecialTab();
     })
     .subscribe();
@@ -722,7 +771,7 @@ function handleRealtimeChange(){
   }
 }
 
-/* ================= 상단 알림: 새 친선경기 안내 ================= */
+/* ================= 상단 알림: 새 추가일정 안내 ================= */
 async function checkSpecialAlert(){
   const events = await loadSpecialEvents();
   const now = new Date();
@@ -734,7 +783,7 @@ async function checkSpecialAlert(){
     const ev = upcoming[0];
     const d = new Date(ev.event_time);
     const dateStr = `${d.getMonth()+1}월 ${d.getDate()}일 (${weekdayOf(d)}) ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    alertText.textContent = `${ev.content} · ${dateStr} 친선경기 투표가 열렸어요!`;
+    alertText.textContent = `${ev.content} · ${dateStr} 추가일정 투표가 열렸어요!`;
     alertBox.dataset.eventId = ev.id;
     alertBox.style.display = 'flex';
   }else{
@@ -744,7 +793,7 @@ async function checkSpecialAlert(){
 function goToSpecialFromAlert(){
   const alertBox = document.getElementById('specialAlert');
   const eventId = alertBox.dataset.eventId;
-  state.specialFlow = { eventId: eventId ? Number(eventId) : null, dept: null, name: null, status: null, step: eventId ? 2 : 1 };
+  state.specialFlow = { eventId: eventId ? Number(eventId) : null, dept: null, name: null, status: null, note: '', step: eventId ? 2 : 1 };
   setMode('special');
 }
 async function toggleEventNotify(eventId, newValue){
@@ -771,7 +820,9 @@ let state = {
   adminDate: findNextThursdayISO(),
   pickerMonth: null,
   specialEvents: [],
-  specialFlow: { eventId: null, dept: null, name: null, status: null, step: 1 },
+  specialFlow: { eventId: null, dept: null, name: null, status: null, note: '', step: 1 },
+  specialPolls: [],
+  pollFlow: { pollId: null, dept: null, name: null, choice: null, step: 1 },
 };
 
 const app = document.getElementById('app');
@@ -1119,21 +1170,29 @@ async function renderNonVotersContent(){
   `;
 }
 
-/* ================= 친선경기 / 특별 모임 (누적점수 미포함) ================= */
+/* ================= 추가일정 (누적점수 미포함) ================= */
 async function renderSpecialTab(){
   app.innerHTML = `<div class="spinner-row">불러오는 중...</div>`;
 
   if(state.specialFlow.eventId){ renderSpecialVoteFlow(); return; }
+  if(state.pollFlow.pollId){ renderPollVoteFlow(); return; }
 
-  const [events, allAtt] = await Promise.all([loadSpecialEvents(), loadAllSpecialAttendance()]);
+  const [events, allAtt, polls, allPollVotes] = await Promise.all([
+    loadSpecialEvents(), loadAllSpecialAttendance(), loadSpecialPolls(), loadAllPollVotes()
+  ]);
   state.specialEvents = events;
+  state.specialPolls = polls;
   const now = new Date();
 
   const countsByEvent = {};
+  const notesByEvent = {};
   allAtt.forEach(r => {
     if(!countsByEvent[r.event_id]) countsByEvent[r.event_id] = { present:0, absent:0 };
     if(r.status === '참석') countsByEvent[r.event_id].present++;
     else countsByEvent[r.event_id].absent++;
+    if(r.note && r.note.trim()){
+      (notesByEvent[r.event_id] = notesByEvent[r.event_id] || []).push({ name: r.member_name, note: r.note, status: r.status });
+    }
   });
 
   let html = `<div class="card">
@@ -1149,7 +1208,7 @@ async function renderSpecialTab(){
       <label class="muted">장소</label>
       <input class="form-select" id="seLocation" type="text" placeholder="예: 월드컵공원 풋살구장">
       <label class="muted">내용</label>
-      <input class="form-select" id="seContent" type="text" placeholder="예: 이웃 동호회와의 친선경기">
+      <input class="form-select" id="seContent" type="text" placeholder="예: 이웃 동호회와의 친선경기 / OO대회 / 정기 회식">
       <button class="submit-btn" id="seSubmitBtn" onclick="submitSpecialEvent()">등록하기</button>
     </div>`;
   }else{
@@ -1180,8 +1239,67 @@ async function renderSpecialTab(){
           <div class="stat-box"><div class="num">${c.absent}</div><div class="lb">불참</div></div>
           <div class="stat-box"><div class="num">${none}</div><div class="lb">미응답</div></div>
         </div>
+        ${(notesByEvent[ev.id] && notesByEvent[ev.id].length) ? `
+          <div style="margin-top:12px;">
+            <div class="muted" style="font-weight:800; color:var(--navy);">💬 특이사항</div>
+            <div style="margin-top:6px; display:flex; flex-direction:column; gap:6px;">
+              ${notesByEvent[ev.id].map(n => `
+                <div style="background:#fafbfd; border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:12.5px;">
+                  <b style="color:var(--navy);">${n.name}</b>
+                  <span class="status-pill ${n.status==='참석'?'present':'absent'}" style="margin-left:6px; padding:1px 8px; font-size:10px;">${n.status}</span>
+                  <div class="muted" style="margin-top:3px;">${n.note}</div>
+                </div>`).join('')}
+            </div>
+          </div>` : ''}
         <button class="submit-btn" style="margin-top:14px;" onclick="openSpecialVote(${ev.id})">투표하기</button>
         ${state.adminAuthed ? `<button class="again-btn" style="width:100%; margin-top:10px;" onclick="toggleEventNotify(${ev.id}, ${!ev.notify_active})">${ev.notify_active ? '🔕 안내판에서 내리기' : '🔔 안내판에 다시 올리기'}</button>` : ''}
+      </div>`;
+    }).join('');
+  }
+  html += `</div>`;
+
+  if(state.adminAuthed){
+    html += `<div class="card">
+      <div class="section-title">🗳️ 새 투표 만들기</div>
+      <p class="muted" style="margin-top:-6px;">출석 여부가 아닌, 식사 메뉴처럼 자유로운 항목에 대한 투표를 만들 수 있어요.</p>
+      <label class="muted">질문</label>
+      <input class="form-select" id="pollTitle" type="text" placeholder="예: 이번 회식 메뉴 뭐로 할까요?">
+      <label class="muted">선택지 (한 줄에 하나씩)</label>
+      <textarea class="form-select" id="pollOptions" rows="4" style="resize:vertical; font-family:inherit;" placeholder="삼겹살&#10;치킨&#10;족발&#10;회"></textarea>
+      <button class="submit-btn" id="pollSubmitBtn" onclick="submitSpecialPoll()">투표 만들기</button>
+    </div>`;
+  }
+
+  const pollCounts = {};
+  allPollVotes.forEach(v => {
+    if(!pollCounts[v.poll_id]) pollCounts[v.poll_id] = {};
+    pollCounts[v.poll_id][v.option_choice] = (pollCounts[v.poll_id][v.option_choice] || 0) + 1;
+  });
+
+  html += `<div class="card"><div class="section-title" style="margin-bottom:0;">🗳️ 진행 중인 투표</div>`;
+  if(!polls.length){
+    html += `<p class="muted" style="margin-top:10px;">아직 등록된 투표가 없어요.</p>`;
+  }else{
+    html += polls.map(p => {
+      const counts = pollCounts[p.id] || {};
+      const totalVotes = Object.values(counts).reduce((a,b)=>a+b, 0);
+      return `<div class="card" style="margin-top:12px;">
+        <div style="font-weight:800; color:var(--navy); font-size:14.5px;">${p.title}</div>
+        <div style="margin-top:10px; display:flex; flex-direction:column; gap:6px;">
+          ${p.options.map(opt => {
+            const cnt = counts[opt] || 0;
+            const pct = totalVotes ? Math.round((cnt/totalVotes)*100) : 0;
+            return `<div>
+              <div style="display:flex; justify-content:space-between; font-size:12.5px; font-weight:700; color:var(--navy);">
+                <span>${opt}</span><span class="muted">${cnt}표 (${pct}%)</span>
+              </div>
+              <div style="background:#eef0f5; border-radius:999px; height:8px; margin-top:3px; overflow:hidden;">
+                <div style="background:var(--orange); height:100%; width:${pct}%;"></div>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+        <button class="submit-btn" style="margin-top:14px;" onclick="openPollVote(${p.id})">투표하기</button>
       </div>`;
     }).join('');
   }
@@ -1203,12 +1321,108 @@ async function submitSpecialEvent(){
 }
 
 function openSpecialVote(eventId){
-  state.specialFlow = { eventId, dept: null, name: null, status: null, step: 2 };
+  state.specialFlow = { eventId, dept: null, name: null, status: null, note: '', step: 2 };
   renderSpecialVoteFlow();
 }
 function backToSpecialList(){
-  state.specialFlow = { eventId: null, dept: null, name: null, status: null, step: 1 };
+  state.specialFlow = { eventId: null, dept: null, name: null, status: null, note: '', step: 1 };
+  state.pollFlow = { pollId: null, dept: null, name: null, choice: null, step: 1 };
   renderSpecialTab();
+}
+
+async function submitSpecialPoll(){
+  const title = document.getElementById('pollTitle').value.trim();
+  const options = document.getElementById('pollOptions').value.split('\n').map(s => s.trim()).filter(Boolean);
+  if(!title || options.length < 2){ alert('질문과 선택지를 2개 이상 입력해주세요.'); return; }
+  const btn = document.getElementById('pollSubmitBtn');
+  btn.disabled = true; btn.textContent = '만드는 중...';
+  const ok = await createSpecialPoll(title, options);
+  if(ok){ renderSpecialTab(); }
+  else{ alert('투표 생성에 실패했습니다. 다시 시도해주세요.'); btn.disabled = false; btn.textContent = '투표 만들기'; }
+}
+
+function openPollVote(pollId){
+  state.pollFlow = { pollId, dept: null, name: null, choice: null, step: 2 };
+  renderPollVoteFlow();
+}
+
+async function renderPollVoteFlow(){
+  app.innerHTML = `<div class="spinner-row">불러오는 중...</div>`;
+  const polls = state.specialPolls.length ? state.specialPolls : await loadSpecialPolls();
+  state.specialPolls = polls;
+  const poll = polls.find(p => p.id === Number(state.pollFlow.pollId) || p.id === state.pollFlow.pollId);
+  if(!poll){ backToSpecialList(); return; }
+  const record = await getPollVotes(poll.id);
+  state.pollFlow.record = record;
+
+  let html = `<div class="card">
+    <div class="breadcrumb" style="margin-top:0;"><span class="reset-link" onclick="backToSpecialList()">← 목록으로</span></div>
+    <div style="margin-top:10px; font-weight:800; color:var(--navy); font-size:15px;">🗳️ ${poll.title}</div>
+  </div>`;
+
+  html += `<div class="card">
+    <div class="section-title"><span class="step-num">1</span> 소속 부서를 선택하세요</div>
+    <div class="dept-grid">
+      ${DEPT_LIST.map(dep => `
+        <button class="dept-btn ${state.pollFlow.dept===dep?'selected':''}" onclick="pollSelectDept('${dep}')">
+          ${dep}<span class="cnt">${MEMBERS_BY_DEPT[dep].length}명</span>
+        </button>`).join('')}
+    </div>
+  </div>`;
+
+  if(state.pollFlow.dept){
+    html += `<div class="card">
+      <div class="section-title"><span class="step-num">2</span> 본인 이름을 선택하세요</div>
+      <div class="name-grid">
+        ${MEMBERS_BY_DEPT[state.pollFlow.dept].map(n => {
+          const r = record[n];
+          const badge = r ? `<span class="badge present">✓</span>` : '';
+          return `<button class="name-btn ${state.pollFlow.name===n?'selected':''}" onclick="pollSelectName('${n}')">${n}${badge}</button>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
+  if(state.pollFlow.name){
+    const r = record[state.pollFlow.name];
+    html += `<div class="card">
+      <div class="section-title"><span class="step-num">3</span> 선택지를 고르세요</div>
+      <div class="name-grid">
+        ${poll.options.map(opt => `
+          <button class="name-btn ${state.pollFlow.choice===opt?'selected':''}" onclick="pollSelectChoice('${opt.replace(/'/g,"\\'")}')" style="padding:14px 8px;">${opt}</button>
+        `).join('')}
+      </div>
+      ${r ? `<p class="muted" style="margin-top:12px;">이미 <b>${r.choice}</b>로 등록되어 있어요. 다시 제출하면 내용이 수정됩니다.</p>` : ''}
+      <button class="submit-btn" id="pollVoteSubmitBtn" ${state.pollFlow.choice ? '' : 'disabled'} onclick="submitPollVote()">제출하기</button>
+    </div>`;
+  }
+
+  app.innerHTML = html;
+}
+function pollSelectDept(d){ state.pollFlow.dept = d; state.pollFlow.name=null; state.pollFlow.choice=null; renderPollVoteFlow(); }
+function pollSelectName(n){
+  state.pollFlow.name = n;
+  const r = state.pollFlow.record[n];
+  state.pollFlow.choice = r ? r.choice : null;
+  renderPollVoteFlow();
+}
+function pollSelectChoice(c){ state.pollFlow.choice = c; renderPollVoteFlow(); }
+
+async function submitPollVote(){
+  const btn = document.getElementById('pollVoteSubmitBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '제출 중...'; }
+  const { pollId, dept, name, choice } = state.pollFlow;
+  const ok = await savePollVote(pollId, name, dept, choice);
+  if(ok){
+    app.innerHTML = `<div class="card confirm-card">
+      <span class="icon">🗳️</span>
+      <h3>${name}님, '${choice}'에 투표했어요!</h3>
+      <button class="again-btn" onclick="backToSpecialList()">목록으로 돌아가기</button>
+    </div>`;
+  }else{
+    alert('제출에 실패했습니다. 다시 시도해주세요.');
+    if(btn){ btn.disabled = false; btn.textContent = '제출하기'; }
+  }
 }
 
 async function renderSpecialVoteFlow(){
@@ -1262,6 +1476,8 @@ async function renderSpecialVoteFlow(){
           <span class="emoji">🙅</span><span class="label">불참</span>
         </button>
       </div>
+      <label class="muted">💬 특이사항 (선택사항 · 예: 30분 늦을 것 같아요)</label>
+      <textarea class="form-select" id="specialNoteInput" rows="2" style="resize:vertical; font-family:inherit;" placeholder="팀원들에게 남길 특이사항을 적어주세요" oninput="state.specialFlow.note=this.value">${state.specialFlow.note || ''}</textarea>
       ${r ? `<p class="muted" style="margin-top:12px;">이미 <b>${r.status}</b>으로 등록되어 있어요. 다시 제출하면 내용이 수정됩니다.</p>` : ''}
       <button class="submit-btn" id="specialSubmitBtn" ${state.specialFlow.status ? '' : 'disabled'} onclick="submitSpecialAttendance()">제출하기</button>
     </div>`;
@@ -1270,11 +1486,12 @@ async function renderSpecialVoteFlow(){
   app.innerHTML = html;
 }
 
-function specialSelectDept(d){ state.specialFlow.dept = d; state.specialFlow.name=null; state.specialFlow.status=null; renderSpecialVoteFlow(); }
+function specialSelectDept(d){ state.specialFlow.dept = d; state.specialFlow.name=null; state.specialFlow.status=null; state.specialFlow.note=''; renderSpecialVoteFlow(); }
 function specialSelectName(n){
   state.specialFlow.name = n;
   const r = state.specialFlow.record[n];
   state.specialFlow.status = r ? r.status : null;
+  state.specialFlow.note = r ? (r.note || '') : '';
   renderSpecialVoteFlow();
 }
 function specialSelectStatus(s){ state.specialFlow.status = s; renderSpecialVoteFlow(); }
@@ -1282,8 +1499,8 @@ function specialSelectStatus(s){ state.specialFlow.status = s; renderSpecialVote
 async function submitSpecialAttendance(){
   const btn = document.getElementById('specialSubmitBtn');
   if(btn){ btn.disabled = true; btn.textContent = '제출 중...'; }
-  const { eventId, dept, name, status } = state.specialFlow;
-  const ok = await saveSpecialAttendanceRow(eventId, name, dept, status);
+  const { eventId, dept, name, status, note } = state.specialFlow;
+  const ok = await saveSpecialAttendanceRow(eventId, name, dept, status, note);
   if(ok){
     app.innerHTML = `<div class="card confirm-card">
       <span class="icon">${status==='참석' ? '✅' : '📋'}</span>
