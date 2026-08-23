@@ -504,7 +504,7 @@ const MEMBERS_BY_DEPT = {
   "총무부": ["강유라","정다정","장문선","김아형","양은비","이가람","김행운","한솔하","이규랑","이은경"],
   "대외부": ["김남형","배진휘","장미향","조연지","김윤희","박소연","이영림","노유림"],
   "홍보부": ["장효원","전소올","박지현","유하연","박유선","이윤지","이하영","김소연","박수진"],
-  "훈련부": ["장혜수","김승현","최지인","배수현","전해림","구현정","강재현","이수민","정온정"]
+  "훈련부": ["장혜수","김승현","최지인","배수현","전해림","구현정","강재현","이수민","정온정","김서연"]
 };
 const DEPT_LIST = Object.keys(MEMBERS_BY_DEPT);
 const NAME_TO_DEPT = {};
@@ -526,7 +526,7 @@ function monthKeyOf(d){ return `${d.getFullYear()}년 ${d.getMonth()+1}월`; }
 function fullDateLabel(d){ return `${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일 (${weekdayOf(d)})`; }
 
 function getThursdays(){
-  const start = new Date(2026,6,16); // 2026-07-16 (this week's Thursday)
+  const start = new Date(2026,7,20); // 2026-08-20 (시즌 시작일)
   const end = new Date(2026,11,31);  // 2026-12-31
   const arr = [];
   let cur = new Date(start);
@@ -625,6 +625,13 @@ async function saveAttendanceRow(iso, name, dept, status){
     return true;
   }catch(e){ console.error('저장 실패', e); return false; }
 }
+async function deleteAttendanceRow(iso, name){
+  try{
+    const { error } = await sb.from('attendance').delete().eq('training_date', iso).eq('member_name', name);
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('취소 실패', e); return false; }
+}
 async function getAllSeasonRecords(){
   const out = {};
   SEASON_DATES.forEach(d => out[isoOf(d)] = {});
@@ -685,6 +692,13 @@ async function saveSpecialAttendanceRow(eventId, name, dept, status, note){
     if(error) throw error;
     return true;
   }catch(e){ console.error('저장 실패', e); return false; }
+}
+async function deleteSpecialAttendanceRow(eventId, name){
+  try{
+    const { error } = await sb.from('special_attendance').delete().eq('event_id', eventId).eq('member_name', name);
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('취소 실패', e); return false; }
 }
 
 /* ================= STORAGE HELPERS: 추가일정 내 투표 (polls) ================= */
@@ -912,6 +926,7 @@ async function renderParticipant(){
       </div>
       ${rec ? `<p class="muted" style="margin-top:12px;">이미 <b>${rec.status}</b>으로 등록되어 있어요. 다시 제출하면 내용이 수정됩니다.</p>` : ''}
       <button class="submit-btn" id="submitBtn" ${state.status? '' : 'disabled'} onclick="submitAttendance()">제출하기</button>
+      ${rec ? `<button class="again-btn" id="cancelBtn" style="width:100%; margin-top:10px;" onclick="cancelAttendance()">↩️ 답변 취소하기 (미응답으로 되돌리기)</button>` : ''}
     </div>`;
   }
 
@@ -979,6 +994,21 @@ async function submitAttendance(){
   else{
     alert('제출에 실패했습니다. 다시 시도해주세요.');
     if(btn){ btn.disabled = false; btn.textContent = '제출하기'; }
+  }
+}
+
+async function cancelAttendance(){
+  if(!confirm(`${state.name}님의 ${labelOf(new Date(state.date+'T00:00:00'))} 투표를 취소하고 미응답 상태로 되돌릴까요?`)) return;
+  const btn = document.getElementById('cancelBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '취소 중...'; }
+  const ok = await deleteAttendanceRow(state.date, state.name);
+  if(ok){
+    state.dateRecord = await getDateRecord(state.date);
+    state.name = null; state.status = null;
+    render();
+  }else{
+    alert('취소에 실패했습니다. 다시 시도해주세요.');
+    if(btn){ btn.disabled = false; btn.textContent = '↩️ 답변 취소하기 (미응답으로 되돌리기)'; }
   }
 }
 
@@ -1480,6 +1510,7 @@ async function renderSpecialVoteFlow(){
       <textarea class="form-select" id="specialNoteInput" rows="2" style="resize:vertical; font-family:inherit;" placeholder="팀원들에게 남길 특이사항을 적어주세요" oninput="state.specialFlow.note=this.value">${state.specialFlow.note || ''}</textarea>
       ${r ? `<p class="muted" style="margin-top:12px;">이미 <b>${r.status}</b>으로 등록되어 있어요. 다시 제출하면 내용이 수정됩니다.</p>` : ''}
       <button class="submit-btn" id="specialSubmitBtn" ${state.specialFlow.status ? '' : 'disabled'} onclick="submitSpecialAttendance()">제출하기</button>
+      ${r ? `<button class="again-btn" id="specialCancelBtn" style="width:100%; margin-top:10px;" onclick="cancelSpecialAttendance()">↩️ 답변 취소하기 (미응답으로 되돌리기)</button>` : ''}
     </div>`;
   }
 
@@ -1510,6 +1541,22 @@ async function submitSpecialAttendance(){
   }else{
     alert('제출에 실패했습니다. 다시 시도해주세요.');
     if(btn){ btn.disabled = false; btn.textContent = '제출하기'; }
+  }
+}
+
+async function cancelSpecialAttendance(){
+  const { eventId, name } = state.specialFlow;
+  if(!confirm(`${name}님의 투표를 취소하고 미응답 상태로 되돌릴까요?`)) return;
+  const btn = document.getElementById('specialCancelBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '취소 중...'; }
+  const ok = await deleteSpecialAttendanceRow(eventId, name);
+  if(ok){
+    state.specialFlow.record = await getSpecialAttendance(eventId);
+    state.specialFlow.name = null; state.specialFlow.status = null; state.specialFlow.note = '';
+    renderSpecialVoteFlow();
+  }else{
+    alert('취소에 실패했습니다. 다시 시도해주세요.');
+    if(btn){ btn.disabled = false; btn.textContent = '↩️ 답변 취소하기 (미응답으로 되돌리기)'; }
   }
 }
 
