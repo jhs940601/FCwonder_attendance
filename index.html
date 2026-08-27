@@ -500,16 +500,15 @@ select.date-select, select.form-select{
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 /* ================= DATA ================= */
-const MEMBERS_BY_DEPT = {
-  "총무부": ["강유라","정다정","장문선","김아형","양은비","이가람","김행운","한솔하","이규랑","이은경"],
-  "대외부": ["김남형","배진휘","장미향","조연지","김윤희","박소연","이영림","노유림"],
-  "홍보부": ["장효원","전소올","박지현","유하연","박유선","이윤지","이하영","김소연","박수진"],
-  "훈련부": ["장혜수","김승현","최지인","배수현","전해림","구현정","강재현","이수민","정온정","김서연"]
-};
-const DEPT_LIST = Object.keys(MEMBERS_BY_DEPT);
-const NAME_TO_DEPT = {};
-DEPT_LIST.forEach(d => MEMBERS_BY_DEPT[d].forEach(n => NAME_TO_DEPT[n] = d));
-const ALL_MEMBERS = Object.keys(NAME_TO_DEPT);
+const DEPT_LIST = ["총무부","대외부","홍보부","훈련부"];
+let MEMBERS_BY_DEPT = { "총무부": [], "대외부": [], "홍보부": [], "훈련부": [] };
+let NAME_TO_DEPT = {};
+let ALL_MEMBERS = [];
+function rebuildMemberIndexes(){
+  NAME_TO_DEPT = {};
+  DEPT_LIST.forEach(d => (MEMBERS_BY_DEPT[d]||[]).forEach(n => NAME_TO_DEPT[n] = d));
+  ALL_MEMBERS = Object.keys(NAME_TO_DEPT);
+}
 const ADMIN_CODE = "FCWD2026";
 
 const SCORE_PRESENT = 2;
@@ -598,6 +597,32 @@ function applyStaticText(){
   if(heroSubtitle) heroSubtitle.textContent = TEXT.hero_subtitle;
   if(deadlineText) deadlineText.textContent = TEXT.deadline_text;
   if(footerText) footerText.innerHTML = `🟢 실시간 동기화 중 · 모든 회원의 화면에 즉시 반영돼요<br>${TEXT.footer_line1}<br>${TEXT.footer_line2}`;
+}
+
+/* ================= 회원 명단 (Supabase) ================= */
+async function loadMembers(){
+  try{
+    const { data, error } = await sb.from('members').select('name,department').order('id', { ascending: true });
+    if(error) throw error;
+    const byDept = { "총무부": [], "대외부": [], "홍보부": [], "훈련부": [] };
+    (data||[]).forEach(row => { if(byDept[row.department]) byDept[row.department].push(row.name); });
+    MEMBERS_BY_DEPT = byDept;
+    rebuildMemberIndexes();
+  }catch(e){ console.error('회원 명단 불러오기 실패', e); }
+}
+async function addMember(name, department){
+  try{
+    const { error } = await sb.from('members').insert({ name, department });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('회원 추가 실패', e); return false; }
+}
+async function removeMember(name){
+  try{
+    const { error } = await sb.from('members').delete().eq('name', name);
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('회원 삭제 실패', e); return false; }
 }
 
 /* ================= STORAGE HELPERS (Supabase) ================= */
@@ -773,6 +798,12 @@ function initRealtime(){
       if(state.mode === 'special') renderSpecialTab();
       else if(state.mode === 'vote') renderParticipant();
       else if(state.mode === 'admin' && state.adminSubTab === 'text') renderTextEditor();
+    })
+    .subscribe();
+  sb.channel('members-live')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, async () => {
+      await loadMembers();
+      render();
     })
     .subscribe();
 }
@@ -1032,12 +1063,14 @@ function renderAdmin(){
       <p class="muted" style="margin-top:-6px;">출석현황과 누적점수는 상단 탭에서 모든 회원이 볼 수 있어요.</p>
       <div class="admin-tabs">
         <button class="${state.adminSubTab==='nonvoters'?'active':''}" onclick="setAdminSubTab('nonvoters')">미투표자 확인</button>
+        <button class="${state.adminSubTab==='members'?'active':''}" onclick="setAdminSubTab('members')">👥 회원 관리</button>
         <button class="${state.adminSubTab==='text'?'active':''}" onclick="setAdminSubTab('text')">✏️ 문구 관리</button>
       </div>
     </div>
     <div id="adminBody"></div>
   `;
   if(state.adminSubTab === 'text') renderTextEditor();
+  else if(state.adminSubTab === 'members') renderMemberEditor();
   else renderNonVotersView();
 }
 function setAdminSubTab(tab){ state.adminSubTab = tab; renderAdmin(); }
@@ -1070,6 +1103,66 @@ async function saveTextField(key){
     statusEl.textContent = '❌ 저장 실패';
   }
   setTimeout(()=>{ if(statusEl) statusEl.textContent=''; }, 2500);
+}
+
+function renderMemberEditor(){
+  const body = document.getElementById('adminBody');
+  body.innerHTML = `<div class="card">
+    <div class="section-title" style="margin-bottom:0;">➕ 회원 추가</div>
+    <label class="muted">이름</label>
+    <input class="form-select" id="newMemberName" type="text" placeholder="이름 입력">
+    <label class="muted">부서</label>
+    <select class="form-select" id="newMemberDept">
+      ${DEPT_LIST.map(d => `<option value="${d}">${d}</option>`).join('')}
+    </select>
+    <button class="submit-btn" id="addMemberBtn" onclick="handleAddMember()">추가하기</button>
+    <div class="err" id="addMemberErr"></div>
+  </div>
+  <div class="card">
+    <div class="section-title" style="margin-bottom:0;">👥 전체 회원 명단 (총 ${ALL_MEMBERS.length}명)</div>
+    ${DEPT_LIST.map(dept => `
+      <div style="margin-top:16px;">
+        <div class="muted" style="font-weight:800; color:var(--navy);">${dept} · ${MEMBERS_BY_DEPT[dept].length}명</div>
+        <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
+          ${MEMBERS_BY_DEPT[dept].map(n => `
+            <div style="display:flex; align-items:center; justify-content:space-between; background:#fafbfd; border:1px solid var(--line); border-radius:10px; padding:8px 12px;">
+              <span style="font-weight:700; color:var(--ink);">${n}</span>
+              <button class="again-btn" style="padding:5px 12px; font-size:11.5px; color:var(--red); border-color:var(--red);" onclick="handleRemoveMember('${n}')">삭제</button>
+            </div>`).join('')}
+        </div>
+      </div>
+    `).join('')}
+  </div>`;
+}
+async function handleAddMember(){
+  const nameInput = document.getElementById('newMemberName');
+  const deptSelect = document.getElementById('newMemberDept');
+  const errEl = document.getElementById('addMemberErr');
+  const name = nameInput.value.trim();
+  const dept = deptSelect.value;
+  errEl.textContent = '';
+  if(!name){ errEl.textContent = '이름을 입력해주세요.'; return; }
+  if(NAME_TO_DEPT[name]){ errEl.textContent = '이미 등록된 이름이에요.'; return; }
+  const btn = document.getElementById('addMemberBtn');
+  btn.disabled = true; btn.textContent = '추가 중...';
+  const ok = await addMember(name, dept);
+  if(ok){
+    await loadMembers();
+    renderMemberEditor();
+  }else{
+    errEl.textContent = '추가에 실패했습니다. 다시 시도해주세요.';
+    btn.disabled = false; btn.textContent = '추가하기';
+  }
+}
+async function handleRemoveMember(name){
+  if(!confirm(`${name}님을 회원 명단에서 삭제할까요?\n(과거 출석 기록은 삭제되지 않아요)`)) return;
+  const ok = await removeMember(name);
+  if(ok){
+    await loadMembers();
+    renderMemberEditor();
+  }else{
+    alert('삭제에 실패했습니다. 다시 시도해주세요.');
+  }
 }
 
 function renderAdminGate(){
@@ -1661,7 +1754,7 @@ async function renderCumulativeInto(targetId){
 
 /* ================= INIT ================= */
 async function initApp(){
-  await loadSettings();
+  await Promise.all([loadSettings(), loadMembers()]);
   applyStaticText();
   render();
   initRealtime();
