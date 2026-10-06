@@ -450,6 +450,20 @@ select.date-select, select.form-select{
   padding:5px 12px; font-size:11.5px; font-weight:700; color:var(--ink-soft);
 }
 
+.sheet-wrap{overflow-x:auto; margin-top:14px; border:1px solid var(--line); border-radius:12px;}
+table.sheet-table{border-collapse:separate; border-spacing:0; width:max-content; min-width:100%; font-size:12.5px;}
+.sheet-table th, .sheet-table td{padding:8px 10px; text-align:center; border-bottom:1px solid var(--line); white-space:nowrap;}
+.sheet-table thead th{background:var(--navy); color:#fff; font-weight:800; font-size:11.5px; position:sticky; top:0;}
+.sheet-table .sticky-col{position:sticky; left:0; background:#fff; text-align:left; font-weight:800; color:var(--navy); border-right:1px solid var(--line); z-index:1;}
+.sheet-table thead .sticky-col{background:var(--navy); color:#fff; z-index:2;}
+.sheet-table tbody tr:nth-child(even) td{background:#fafbfd;}
+.sheet-table tbody tr:nth-child(even) td.sticky-col{background:#fafbfd;}
+.sheet-table tfoot td{background:#eef0f5; font-weight:800; color:var(--navy); border-bottom:none;}
+.sheet-table tfoot td.sticky-col{background:#eef0f5;}
+.sheet-table .c-present{color:var(--green); font-weight:900;}
+.sheet-table .c-absent{color:var(--red); font-weight:900;}
+.sheet-table .c-none{color:#c0c5d3;}
+.sheet-table .rate{color:var(--orange); font-weight:900;}
 .spinner-row{text-align:center; padding:30px; color:var(--ink-soft); font-weight:700; font-size:13px;}
 
 .footer-note{text-align:center; margin-top:30px; font-size:11.5px; color:#9aa0b4; line-height:1.8;}
@@ -810,7 +824,10 @@ function initRealtime(){
 function handleRealtimeChange(){
   if(state.mode === 'daily') renderDailyContent(state.publicDate);
   else if(state.mode === 'cumulative') renderPublicCumulative();
-  else if(state.mode === 'admin' && state.adminAuthed) renderNonVotersContent();
+  else if(state.mode === 'admin' && state.adminAuthed){
+    if(state.adminSubTab === 'nonvoters') renderNonVotersContent();
+    else if(state.adminSubTab === 'sheet') renderAttendanceSheetContent();
+  }
   else if(state.mode === 'vote' && state.date && state.step < 5){
     getDateRecord(state.date).then(rec => { state.dateRecord = rec; render(); });
   }
@@ -1063,6 +1080,7 @@ function renderAdmin(){
       <p class="muted" style="margin-top:-6px;">출석현황과 누적점수는 상단 탭에서 모든 회원이 볼 수 있어요.</p>
       <div class="admin-tabs">
         <button class="${state.adminSubTab==='nonvoters'?'active':''}" onclick="setAdminSubTab('nonvoters')">미투표자 확인</button>
+        <button class="${state.adminSubTab==='sheet'?'active':''}" onclick="setAdminSubTab('sheet')">📋 출석부</button>
         <button class="${state.adminSubTab==='members'?'active':''}" onclick="setAdminSubTab('members')">👥 회원 관리</button>
         <button class="${state.adminSubTab==='text'?'active':''}" onclick="setAdminSubTab('text')">✏️ 문구 관리</button>
       </div>
@@ -1071,6 +1089,7 @@ function renderAdmin(){
   `;
   if(state.adminSubTab === 'text') renderTextEditor();
   else if(state.adminSubTab === 'members') renderMemberEditor();
+  else if(state.adminSubTab === 'sheet') renderAttendanceSheet();
   else renderNonVotersView();
 }
 function setAdminSubTab(tab){ state.adminSubTab = tab; renderAdmin(); }
@@ -1103,6 +1122,68 @@ async function saveTextField(key){
     statusEl.textContent = '❌ 저장 실패';
   }
   setTimeout(()=>{ if(statusEl) statusEl.textContent=''; }, 2500);
+}
+
+/* ================= 출석부 (훈련 날짜별 개인 출석표, 읽기 전용) ================= */
+function lastPastThursdayISO(){
+  const past = SEASON_DATES.filter(d => d < TODAY);
+  return past.length ? isoOf(past[past.length-1]) : isoOf(SEASON_DATES[0]);
+}
+function renderAttendanceSheet(){
+  if(!state.sheetStart) state.sheetStart = '2026-08-27';
+  if(!state.sheetEnd) state.sheetEnd = lastPastThursdayISO();
+  const body = document.getElementById('adminBody');
+  const opts = sel => SEASON_DATES.map(d => `<option value="${isoOf(d)}" ${isoOf(d)===sel?'selected':''}>${fullDateLabel(d)}</option>`).join('');
+  body.innerHTML = `<div class="card">
+    <div class="section-title" style="margin-bottom:0;">📋 훈련 출석부</div>
+    <p class="muted">훈련 날짜별 회원 출석 현황이에요. 회원은 가나다 순으로 정렬돼요.</p>
+    <label class="muted">시작일</label>
+    <select class="date-select" id="sheetStartSel" style="margin-top:0;">${opts(state.sheetStart)}</select>
+    <label class="muted">종료일</label>
+    <select class="date-select" id="sheetEndSel" style="margin-top:0;">${opts(state.sheetEnd)}</select>
+    <div id="sheetContent"><div class="spinner-row">불러오는 중...</div></div>
+  </div>`;
+  document.getElementById('sheetStartSel').addEventListener('change', e => { state.sheetStart = e.target.value; renderAttendanceSheetContent(); });
+  document.getElementById('sheetEndSel').addEventListener('change', e => { state.sheetEnd = e.target.value; renderAttendanceSheetContent(); });
+  renderAttendanceSheetContent();
+}
+async function renderAttendanceSheetContent(){
+  const cont = document.getElementById('sheetContent');
+  if(!cont) return;
+  const dates = SEASON_DATES.filter(d => isoOf(d) >= state.sheetStart && isoOf(d) <= state.sheetEnd);
+  if(!dates.length){ cont.innerHTML = `<p class="muted" style="margin-top:12px;">선택한 기간에 훈련 날짜가 없어요. 시작일과 종료일을 확인해주세요.</p>`; return; }
+  const all = await getAllSeasonRecords();
+  const members = ALL_MEMBERS.slice().sort((a,b) => a.localeCompare(b, 'ko'));
+  const totals = dates.map(() => 0);
+  const rows = members.map(n => {
+    let present = 0;
+    const cells = dates.map((d, i) => {
+      const r = (all[isoOf(d)] || {})[n];
+      if(r && r.status === '참석'){ present++; totals[i]++; return `<td class="c-present">✓</td>`; }
+      if(r && r.status === '불참') return `<td class="c-absent">✕</td>`;
+      return `<td class="c-none">·</td>`;
+    }).join('');
+    const rate = Math.round((present / dates.length) * 100);
+    return `<tr><td class="sticky-col">${n}</td>${cells}<td>${present}/${dates.length}</td><td class="rate">${rate}%</td></tr>`;
+  }).join('');
+  const head = dates.map(d => `<th>${d.getMonth()+1}/${d.getDate()}</th>`).join('');
+  const foot = totals.map(t => `<td>${t}</td>`).join('');
+  const totalPresent = totals.reduce((a,b)=>a+b,0);
+  const avgRate = members.length ? Math.round((totalPresent / (members.length * dates.length)) * 100) : 0;
+  cont.innerHTML = `
+    <div class="stat-row">
+      <div class="stat-box"><div class="num">${dates.length}</div><div class="lb">훈련 횟수</div></div>
+      <div class="stat-box"><div class="num">${members.length}</div><div class="lb">회원 수</div></div>
+      <div class="stat-box hl"><div class="num">${avgRate}%</div><div class="lb">전체 평균 출석률</div></div>
+    </div>
+    <div class="legend"><span>✓ 참석</span><span>✕ 불참</span><span>· 미응답</span><span>출석률 = 참석 ÷ 훈련 횟수</span></div>
+    <div class="sheet-wrap">
+      <table class="sheet-table">
+        <thead><tr><th class="sticky-col">이름</th>${head}<th>참석</th><th>출석률</th></tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr><td class="sticky-col">참석 인원</td>${foot}<td></td><td></td></tr></tfoot>
+      </table>
+    </div>`;
 }
 
 function renderMemberEditor(){
